@@ -167,11 +167,3 @@ Visualization Dashboard
 - HTML content is stripped from descriptions
 - The dashboard uses only processed data files (separation of concerns)
 
-## License
-
-[Add your license here]
-
-## Author
-
-[Add your name/contact here]
-
