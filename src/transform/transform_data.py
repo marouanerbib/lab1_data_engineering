@@ -1,0 +1,204 @@
+#!/usr/bin/env python3
+"""Transform raw Play Store data into normalized processed files.
+
+Outputs written to data/processed/:
+ - apps_metadata_processed.json  (array of app objects)
+ - user_reviews_processed.jsonl  (JSONL, one review per line)
+
+Notes (informal):
+ - Keep `userName` and `userImage` as requested.
+ - Parse timestamps to ISO and epoch; normalize numeric fields.
+ - Strip HTML from `descriptionHTML` into `description_text` using a simple regex.
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import html
+from datetime import datetime, timezone
+from typing import Any, Dict
+
+
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+RAW_DIR = os.path.join(ROOT, "data", "raw")
+PROCESSED_DIR = os.path.join(ROOT, "data", "processed")
+
+
+def ensure_dirs() -> None:
+    os.makedirs(PROCESSED_DIR, exist_ok=True)
+
+
+def strip_html(text: str) -> str:
+    if text is None:
+        return ""
+    # Unescape HTML entities
+    t = html.unescape(text)
+    # Remove tags
+    t = re.sub(r"<[^>]+>", "", t)
+    # Collapse whitespace
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
+
+def parse_epoch_int(ts: Any) -> int | None:
+    try:
+        if ts is None:
+            return None
+        return int(ts)
+    except Exception:
+        return None
+
+
+def epoch_to_iso(e: int | None) -> str | None:
+    if not e:
+        return None
+    try:
+        return datetime.fromtimestamp(int(e), tz=timezone.utc).isoformat()
+    except Exception:
+        return None
+
+
+def parse_human_datetime(s: str) -> str | None:
+    if not s:
+        return None
+    # Try common formats seen in data: 'Jan 5, 2026' or '2025-11-08 13:54:14'
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%b %d, %Y", "%B %d, %Y"):
+        try:
+            dt = datetime.strptime(s, fmt)
+            return dt.replace(tzinfo=timezone.utc).isoformat()
+        except Exception:
+            continue
+    # Fallback: return original trimmed
+    return s.strip()
+
+
+def normalize_installs(app: Dict[str, Any]) -> Dict[str, Any]:
+    # prefer numeric fields when available
+    min_installs = app.get("minInstalls")
+    real_installs = app.get("realInstalls")
+    installs_str = app.get("installs")
+    if not min_installs and isinstance(installs_str, str):
+        m = re.search(r"([0-9,]+)"+r"\+?", installs_str.replace(',', ''))
+        if m:
+            try:
+                min_installs = int(re.sub(r"[^0-9]", "", installs_str))
+            except Exception:
+                min_installs = None
+    app["minInstalls"] = int(min_installs) if min_installs is not None else None
+    app["realInstalls"] = int(real_installs) if real_installs is not None else None
+    return app
+
+
+def transform_apps(in_path: str, out_path: str) -> None:
+    print(f"Reading apps from {in_path}")
+    with open(in_path, "r", encoding="utf-8") as f:
+        apps = json.load(f)
+
+    processed = []
+    for a in apps:
+        app = dict(a)
+        # description text (strip HTML)
+        app["description_text"] = strip_html(app.get("descriptionHTML") or app.get("description") or "")
+
+        # normalize installs
+        app = normalize_installs(app)
+
+        # epoch -> iso
+        app["updated_iso"] = epoch_to_iso(parse_epoch_int(app.get("updated")))
+
+        # human dates
+        app["released_iso"] = parse_human_datetime(app.get("released"))
+        app["lastUpdatedOn_iso"] = parse_human_datetime(app.get("lastUpdatedOn"))
+
+        # categories flatten
+        cats = app.get("categories") or []
+        app["category_ids"] = [c.get("id") for c in cats if isinstance(c, dict) and c.get("id")]
+        app["category_names"] = [c.get("name") for c in cats if isinstance(c, dict) and c.get("name")]
+
+        # keep only needed large lists as-is (apps may have many screenshots)
+        # leave `screenshots`, `icon`, `headerImage` intact
+
+        processed.append(app)
+
+    print(f"Writing {len(processed)} apps to {out_path}")
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(processed, f, ensure_ascii=False, indent=2)
+
+
+def safe_int(v: Any) -> int | None:
+    try:
+        if v is None:
+            return None
+        return int(v)
+    except Exception:
+        return None
+
+
+def transform_reviews(in_path: str, out_path: str, max_lines: int | None = None) -> None:
+    print(f"Reading reviews from {in_path} and writing processed JSONL to {out_path}")
+    count = 0
+    with open(in_path, "r", encoding="utf-8") as fin, open(out_path, "w", encoding="utf-8") as fout:
+        for line in fin:
+            line = line.strip()
+            if not line:
+                continue
+            # Some lines may be concatenated without newline; attempt to parse safely
+            try:
+                obj = json.loads(line)
+            except Exception:
+                # try to fix common issues by finding first/last braces
+                try:
+                    start = line.find('{')
+                    end = line.rfind('}')
+                    obj = json.loads(line[start:end+1])
+                except Exception:
+                    # skip malformed
+                    continue
+
+            r = dict(obj)
+            # timestamp 'at' like '2025-11-08 13:54:14' -> ISO + epoch
+            at_raw = r.get("at")
+            at_iso = None
+            at_epoch = None
+            if isinstance(at_raw, str) and at_raw:
+                try:
+                    dt = datetime.strptime(at_raw, "%Y-%m-%d %H:%M:%S")
+                    dt = dt.replace(tzinfo=timezone.utc)
+                    at_iso = dt.isoformat()
+                    at_epoch = int(dt.timestamp())
+                except Exception:
+                    at_iso = parse_human_datetime(at_raw)
+
+            r["at_iso"] = at_iso
+            r["at_epoch"] = at_epoch
+
+            # numeric fields
+            r["score"] = safe_int(r.get("score"))
+            r["thumbsUpCount"] = safe_int(r.get("thumbsUpCount"))
+
+            # keep userName and userImage per user request
+
+            fout.write(json.dumps(r, ensure_ascii=False) + "\n")
+            count += 1
+            if max_lines and count >= max_lines:
+                break
+
+    print(f"Wrote {count} reviews")
+
+
+def main() -> None:
+    ensure_dirs()
+
+    apps_in = os.path.join(RAW_DIR, "apps_metadata_raw.json")
+    apps_out = os.path.join(PROCESSED_DIR, "apps_metadata_processed.json")
+
+    reviews_in = os.path.join(RAW_DIR, "user_reviews_raw.jsonl")
+    reviews_out = os.path.join(PROCESSED_DIR, "user_reviews_processed.jsonl")
+
+    transform_apps(apps_in, apps_out)
+    transform_reviews(reviews_in, reviews_out)
+
+
+if __name__ == "__main__":
+    main()

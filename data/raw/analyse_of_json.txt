@@ -1,0 +1,38 @@
+Informal observations (brief)
+
+@  apps_metadata_raw.json
+
+
+Top-level: JSON array of app objects.
+Common keys per app: title, description, descriptionHTML, summary, installs (human string), minInstalls (int), realInstalls (int), score (float), ratings (int), reviews (int), histogram (array of 5 ints), price, free (bool), currency, offersIAP (bool), inAppProductPrice (string), developer fields (developer, developerId, developerEmail, developerWebsite, developerAddress), privacyPolicy, genre, categories (array of {name,id}), image URLs (icon, headerImage, screenshots), video, contentRating, released (human date), lastUpdatedOn (human date), updated (epoch int), version, comments (usually []), appId, url.
+Types: mixture of long text (strings, often with HTML), numeric fields, booleans, arrays, and nulls.
+Nested structures: categories array of dicts; histogram array (star counts); screenshots array of URLs; descriptionHTML contains markup/escaped chars.
+Missing / inconsistent values: developerWebsite, developerAddress, video often null; inAppProductPrice is a free-form string; installs is human-readable (e.g., "5,000,000+") while minInstalls/realInstalls are numeric — use numeric fields for analytics.
+Notes for analytics: need to normalize installs / minInstalls / realInstalls, parse lastUpdatedOn or use updated epoch, strip HTML from descriptionHTML if doing NLP, and probably drop or compress large media URL lists unless needed.
+
+
+@  user_reviews_raw.jsonl (sample)
+
+Format: JSON Lines, one JSON object per review (good for streaming).
+Typical keys: reviewId, userName, userImage, content (text), score (1–5 int), thumbsUpCount (int), reviewCreatedVersion (string|null), at (string timestamp "YYYY-MM-DD HH:MM:SS"), replyContent (developer reply|null), repliedAt (string|null), appVersion (string|null), appId (present).
+Types: strings (often multilingual, emojis), ints, nulls.
+Missing / inconsistent values: many reviews have null for reviewCreatedVersion/appVersion/replyContent/repliedAt; userImage sometimes contains different URL formats; at is human-readable string (convert to ISO/epoch).
+Nested/extra info: developer replies are embedded (replyContent/repliedAt) — may be useful but separate from user sentiment.
+Privacy/PII: userName and userImage are present — consider anonymization if releasing data.
+Text issues: content contains HTML-escaped chars, URLs, newlines, emojis, and non-ASCII languages — require normalization/encoding-aware parsing for NLP.
+Good: each review includes appId, making joins to apps_metadata_raw.json straightforward.
+
+
+
+Quick actionable normalization suggestions (next steps)
+
+
+
+
+
+Convert review at to ISO-8601 / epoch; parse appVersion fields consistently.
+Normalize installs: use minInstalls/realInstalls for numeric analytics; derive bucket from installs string if needed.
+Strip HTML from descriptionHTML and description cleanup (or keep raw for advanced NLP).
+Flatten categories to a single genreId and category_names list for simple analyses.
+Handle missing values explicitly (nulls) and log counts per field.
+Consider removing or hashing userName / userImage before sharing to protect privacy.
