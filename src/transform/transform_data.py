@@ -12,12 +12,13 @@ Notes (informal):
 """
 from __future__ import annotations
 
+import csv
 import json
 import os
 import re
 import html
 from datetime import datetime, timezone
-from typing import Any, Dict
+from typing import Any, Dict, Iterable, Mapping
 
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -93,7 +94,11 @@ def normalize_installs(app: Dict[str, Any]) -> Dict[str, Any]:
 def transform_apps(in_path: str, out_path: str) -> None:
     print(f"Reading apps from {in_path}")
     with open(in_path, "r", encoding="utf-8") as f:
-        apps = json.load(f)
+        if in_path.lower().endswith(".json"):
+            apps = json.load(f)
+        else:
+            reader = csv.DictReader(f)
+            apps = list(reader)
 
     processed = []
     for a in apps:
@@ -135,29 +140,75 @@ def safe_int(v: Any) -> int | None:
         return None
 
 
-def transform_reviews(in_path: str, out_path: str, max_lines: int | None = None) -> None:
-    print(f"Reading reviews from {in_path} and writing processed JSONL to {out_path}")
-    count = 0
-    with open(in_path, "r", encoding="utf-8") as fin, open(out_path, "w", encoding="utf-8") as fout:
+def _iter_reviews_jsonl(path: str) -> Iterable[Dict[str, Any]]:
+    with open(path, "r", encoding="utf-8") as fin:
         for line in fin:
             line = line.strip()
             if not line:
                 continue
-            # Some lines may be concatenated without newline; attempt to parse safely
             try:
                 obj = json.loads(line)
             except Exception:
-                # try to fix common issues by finding first/last braces
                 try:
-                    start = line.find('{')
-                    end = line.rfind('}')
-                    obj = json.loads(line[start:end+1])
+                    start = line.find("{")
+                    end = line.rfind("}")
+                    obj = json.loads(line[start : end + 1])
                 except Exception:
-                    # skip malformed
                     continue
+            yield obj
 
+
+def _get_first(mapping: Mapping[str, Any], candidates: list[str]) -> Any:
+    lower_map = {k.lower(): v for k, v in mapping.items()}
+    for name in candidates:
+        v = lower_map.get(name.lower())
+        if v is not None:
+            return v
+    return None
+
+
+def _normalize_review_row(row: Mapping[str, Any]) -> Dict[str, Any]:
+    return {
+        "reviewId": _get_first(row, ["reviewId", "review_id", "id"]),
+        "userName": _get_first(row, ["userName", "user_name", "author", "author_name"]),
+        "userImage": _get_first(row, ["userImage", "user_image", "avatar"]),
+        "content": _get_first(row, ["content", "review_text", "text", "body"]),
+        "score": _get_first(row, ["score", "rating", "stars"]),
+        "thumbsUpCount": _get_first(row, ["thumbsUpCount", "likes", "helpful_count"]),
+        "reviewCreatedVersion": _get_first(row, ["reviewCreatedVersion", "review_version"]),
+        "at": _get_first(row, ["at", "timestamp", "created_at"]),
+        "replyContent": _get_first(row, ["replyContent", "reply_text"]),
+        "repliedAt": _get_first(row, ["repliedAt", "reply_timestamp"]),
+        "appVersion": _get_first(row, ["appVersion", "app_version"]),
+        "appId": _get_first(row, ["appId", "app_id"]),
+    }
+
+
+def _iter_reviews_csv(path: str) -> Iterable[Dict[str, Any]]:
+    with open(path, "r", encoding="utf-8") as fin:
+        reader = csv.DictReader(fin)
+        for row in reader:
+            yield _normalize_review_row(row)
+
+
+def _iter_reviews(in_path: str) -> Iterable[Dict[str, Any]]:
+    if in_path.lower().endswith(".csv"):
+        yield from _iter_reviews_csv(in_path)
+    else:
+        yield from _iter_reviews_jsonl(in_path)
+
+
+def transform_reviews(in_path: str, out_path: str, max_lines: int | None = None) -> None:
+    print(f"Reading reviews from {in_path} and writing processed JSONL to {out_path}")
+    if not os.path.exists(in_path):
+        raise FileNotFoundError(f"Raw reviews file not found: {in_path}")
+
+    count = 0
+    tmp_out = out_path + ".tmp"
+    with open(tmp_out, "w", encoding="utf-8") as fout:
+        for obj in _iter_reviews(in_path):
             r = dict(obj)
-            # timestamp 'at' like '2025-11-08 13:54:14' -> ISO + epoch
+
             at_raw = r.get("at")
             at_iso = None
             at_epoch = None
@@ -173,17 +224,15 @@ def transform_reviews(in_path: str, out_path: str, max_lines: int | None = None)
             r["at_iso"] = at_iso
             r["at_epoch"] = at_epoch
 
-            # numeric fields
             r["score"] = safe_int(r.get("score"))
             r["thumbsUpCount"] = safe_int(r.get("thumbsUpCount"))
-
-            # keep userName and userImage per user request
 
             fout.write(json.dumps(r, ensure_ascii=False) + "\n")
             count += 1
             if max_lines and count >= max_lines:
                 break
 
+    os.replace(tmp_out, out_path)
     print(f"Wrote {count} reviews")
 
 
