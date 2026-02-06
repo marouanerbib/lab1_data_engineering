@@ -167,6 +167,10 @@ Visualization Dashboard
 - HTML content is stripped from descriptions
 - The dashboard uses only processed data files (separation of concerns)
 
+Names : 
+- El Khazane Ilyasse
+- Rbib Marouane
+
 ## Feedback
 - Kuddos on a job well done.
 - Computing the KPIs is a bit too complicated, if you use dataframes you get access to pandas aggregations, which will optimize the code significantly
