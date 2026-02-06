@@ -167,12 +167,9 @@ Visualization Dashboard
 - HTML content is stripped from descriptions
 - The dashboard uses only processed data files (separation of concerns)
 
-## License
-
-[Add your license here]
 
 ## Authors
 
 - **Marouane Rbib**
-- **Ilyass El Khazane**
+- **Ilyasse El Khazane**
 
